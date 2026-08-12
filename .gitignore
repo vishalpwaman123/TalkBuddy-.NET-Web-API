@@ -1,0 +1,18 @@
+## .NET
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+## Rider/VSCode
+.idea/
+.vscode/
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Local secrets
+appsettings.Development.json
+appsettings.*.local.json

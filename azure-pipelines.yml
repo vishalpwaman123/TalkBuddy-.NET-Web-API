@@ -1,0 +1,101 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: talkbuddy-aws            # created in Pipelines > Library, holds AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (secret) / AWS_ACCOUNT_ID
+  - name: awsRegion
+    value: 'ap-south-1'             # change to the region you created your AWS resources in
+  - name: ecrRepo
+    value: 'talkbuddy-api'
+  - name: ecsCluster
+    value: 'talkbuddy-cluster'
+  - name: ecsService
+    value: 'talkbuddy-api-service'
+  - name: imageTag
+    value: '$(Build.BuildId)'
+
+stages:
+  - stage: Build
+    displayName: 'Build & test'
+    jobs:
+      - job: BuildAndTest
+        steps:
+          - task: UseDotNet@2
+            inputs:
+              packageType: 'sdk'
+              version: '10.0.x'
+
+          - script: dotnet restore TalkBuddy.API.csproj
+            displayName: 'dotnet restore'
+
+          - script: dotnet build TalkBuddy.API.csproj --configuration Release --no-restore
+            displayName: 'dotnet build'
+
+          # No test project exists yet — add one (dotnet new xunit) and this
+          # step will start picking it up automatically.
+          - script: |
+              if ls *.Tests/*.csproj 1> /dev/null 2>&1; then
+                dotnet test --configuration Release --no-restore
+              else
+                echo "No test project found yet — skipping dotnet test."
+              fi
+            displayName: 'dotnet test (if present)'
+
+  - stage: DockerizeAndPush
+    displayName: 'Build image & push to ECR'
+    dependsOn: Build
+    jobs:
+      - job: BuildPushImage
+        steps:
+          - script: |
+              set -e
+              export AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID)
+              export AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY)
+              export AWS_DEFAULT_REGION=$(awsRegion)
+
+              aws ecr get-login-password --region $(awsRegion) \
+                | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(awsRegion).amazonaws.com
+
+              docker build -t $(ecrRepo):$(imageTag) .
+              docker tag $(ecrRepo):$(imageTag) $(AWS_ACCOUNT_ID).dkr.ecr.$(awsRegion).amazonaws.com/$(ecrRepo):$(imageTag)
+              docker push $(AWS_ACCOUNT_ID).dkr.ecr.$(awsRegion).amazonaws.com/$(ecrRepo):$(imageTag)
+            displayName: 'Login, build, push image to ECR'
+
+  - stage: DeployECS
+    displayName: 'Deploy to ECS'
+    dependsOn: DockerizeAndPush
+    jobs:
+      - deployment: DeployToECS
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: |
+                    set -e
+                    export AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID)
+                    export AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY)
+                    export AWS_DEFAULT_REGION=$(awsRegion)
+
+                    sed \
+                      -e "s|<ACCOUNT_ID>|$(AWS_ACCOUNT_ID)|g" \
+                      -e "s|<AWS_REGION>|$(awsRegion)|g" \
+                      -e "s|<IMAGE_TAG>|$(imageTag)|g" \
+                      -e "s|<UI_PUBLIC_URL>|$(UI_PUBLIC_URL)|g" \
+                      deploy/ecs-task-def.json > deploy/ecs-task-def.rendered.json
+
+                    TASK_DEF_ARN=$(aws ecs register-task-definition \
+                      --cli-input-json file://deploy/ecs-task-def.rendered.json \
+                      --query 'taskDefinition.taskDefinitionArn' --output text)
+
+                    aws ecs update-service \
+                      --cluster $(ecsCluster) \
+                      --service $(ecsService) \
+                      --task-definition "$TASK_DEF_ARN" \
+                      --force-new-deployment
+                  displayName: 'Register task def revision & update ECS service'

@@ -1,0 +1,35 @@
+{
+  "family": "talkbuddy-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/talkbuddyEcsExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "talkbuddy-api",
+      "image": "<ACCOUNT_ID>.dkr.ecr.<AWS_REGION>.amazonaws.com/talkbuddy-api:<IMAGE_TAG>",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 8080, "protocol": "tcp" }
+      ],
+      "secrets": [
+        { "name": "AnthropicApiKey", "valueFrom": "arn:aws:ssm:<AWS_REGION>:<ACCOUNT_ID>:parameter/talkbuddy/AnthropicApiKey" },
+        { "name": "DbServer", "valueFrom": "arn:aws:ssm:<AWS_REGION>:<ACCOUNT_ID>:parameter/talkbuddy/DbServer" },
+        { "name": "DbName", "valueFrom": "arn:aws:ssm:<AWS_REGION>:<ACCOUNT_ID>:parameter/talkbuddy/DbName" }
+      ],
+      "environment": [
+        { "name": "AllowedOrigins__0", "value": "<UI_PUBLIC_URL>" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/talkbuddy-api",
+          "awslogs-region": "<AWS_REGION>",
+          "awslogs-stream-prefix": "api",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}
